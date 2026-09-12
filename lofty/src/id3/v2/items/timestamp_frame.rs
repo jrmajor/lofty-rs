@@ -1,10 +1,11 @@
 use crate::config::{ParsingMode, WriteOptions};
 use crate::id3::v2::error::FrameParseError;
 use crate::id3::v2::frame::error::FrameEncodingError;
-use crate::id3::v2::{FrameFlags, FrameHeader, FrameId};
+use crate::id3::v2::{Frame, FrameFlags, FrameHeader, FrameId, TextInformationFrame};
 use crate::tag::items::Timestamp;
 use crate::util::text::{TextDecodeOptions, TextEncoding, decode_text};
 
+use std::borrow::Cow;
 use std::io::Read;
 
 use byteorder::ReadBytesExt;
@@ -64,13 +65,43 @@ impl<'a> TimestampFrame<'a> {
 	/// # Errors
 	///
 	/// * Failure to read from `reader`
-	#[allow(clippy::never_loop)]
+	/// * The content is not a valid timestamp (unless using [`ParsingMode::Relaxed`], where `None` is returned)
 	pub fn parse<R>(
 		reader: &mut R,
 		id: FrameId<'a>,
 		frame_flags: FrameFlags,
 		parse_mode: ParsingMode,
 	) -> Result<Option<Self>, FrameParseError>
+	where
+		R: Read,
+	{
+		match Self::parse_or_text(reader, id, frame_flags, parse_mode)? {
+			Some(Frame::Timestamp(frame)) => Ok(Some(frame)),
+			Some(Frame::Text(frame)) => {
+				if parse_mode == ParsingMode::Relaxed {
+					return Ok(None);
+				}
+
+				Err(FrameParseError::message(
+					Some(frame.header.id.into_owned()),
+					"Frame content is not a valid timestamp",
+				))
+			},
+			_ => Ok(None),
+		}
+	}
+
+	/// Read a [`TimestampFrame`], falling back to a [`TextInformationFrame`] when the content
+	/// cannot be represented as a single [`Timestamp`]
+	///
+	/// This happens when the frame holds multiple values, or when the text is not a parsable
+	/// timestamp (e.g. "circa 1990"). In [`ParsingMode::Strict`], such content is still an error.
+	pub(crate) fn parse_or_text<R>(
+		reader: &mut R,
+		id: FrameId<'a>,
+		frame_flags: FrameFlags,
+		parse_mode: ParsingMode,
+	) -> Result<Option<Frame<'a>>, FrameParseError>
 	where
 		R: Read,
 	{
@@ -92,29 +123,48 @@ impl<'a> TimestampFrame<'a> {
 			Err(e) => return Err(FrameParseError::new(Some(id.into_owned()), Box::new(e))),
 		};
 
-		let reader = &mut value.as_bytes();
+		let is_multi_value = value.contains('\0');
+		if !is_multi_value {
+			let reader = &mut value.as_bytes();
 
-		let result;
-		match Timestamp::parse(reader, parse_mode) {
-			Ok(timestamp) => result = timestamp,
-			Err(e) => {
-				if parse_mode != ParsingMode::Relaxed {
-					return Err(FrameParseError::new(Some(id.into_owned()), Box::new(e)));
-				}
-				return Ok(None);
-			},
+			match Timestamp::parse(reader, parse_mode) {
+				Ok(Some(timestamp)) => {
+					return Ok(Some(Frame::Timestamp(TimestampFrame {
+						header: FrameHeader::new(id, frame_flags),
+						encoding,
+						timestamp,
+					})));
+				},
+				Ok(None) if value.trim().is_empty() => {
+					// Timestamp is empty
+					return Ok(None);
+				},
+				Ok(None) => {},
+				Err(e) => {
+					if parse_mode == ParsingMode::Strict {
+						return Err(FrameParseError::new(Some(id.into_owned()), Box::new(e)));
+					}
+				},
+			}
 		}
 
-		let Some(timestamp) = result else {
-			// Timestamp is empty
-			return Ok(None);
-		};
+		if parse_mode == ParsingMode::Strict {
+			return Err(FrameParseError::message(
+				Some(id.into_owned()),
+				"Frame content is not a valid timestamp",
+			));
+		}
 
-		Ok(Some(TimestampFrame {
+		log::warn!(
+			"Frame {} does not contain a single valid timestamp, preserving it as text",
+			id
+		);
+
+		Ok(Some(Frame::Text(TextInformationFrame {
 			header: FrameHeader::new(id, frame_flags),
 			encoding,
-			timestamp,
-		}))
+			value: Cow::Owned(value),
+		})))
 	}
 
 	/// Convert a [`TimestampFrame`] to a byte vec

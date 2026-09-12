@@ -481,13 +481,15 @@ impl Accessor for Id3v2Tag {
 	}
 
 	fn date(&self) -> Option<Timestamp> {
-		if let Some(Frame::Timestamp(TimestampFrame { timestamp, .. })) =
-			self.get(&RECORDING_TIME_ID)
-		{
-			return Some(*timestamp);
+		match self.get(&RECORDING_TIME_ID) {
+			Some(Frame::Timestamp(TimestampFrame { timestamp, .. })) => Some(*timestamp),
+			// Unparsable or multi-value timestamps are preserved as text frames
+			Some(Frame::Text(TextInformationFrame { value, .. })) => {
+				let first_value = value.split('\0').next()?;
+				first_value.parse::<Timestamp>().ok()
+			},
+			_ => None,
 		}
-
-		None
 	}
 
 	fn set_date(&mut self, value: Timestamp) {

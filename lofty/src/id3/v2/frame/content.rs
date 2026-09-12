@@ -55,9 +55,8 @@ pub(super) fn parse_content<R: Read>(
 			.transpose()?
 			.map(Frame::Private),
 		"TDEN" | "TDOR" | "TDRC" | "TDRL" | "TDTG" => {
-			TimestampFrame::parse(reader, id, flags, parse_options.parsing_mode)
+			TimestampFrame::parse_or_text(reader, id, flags, parse_options.parsing_mode)
 				.transpose()?
-				.map(Frame::Timestamp)
 		},
 		i if i.starts_with('T') => TextInformationFrame::parse(reader, id, flags, version)
 			.transpose()?

@@ -1749,3 +1749,131 @@ fn read_discards_only_empty_duplicate_frames() {
 		.collect::<Vec<_>>();
 	assert_eq!(contents, ["Alice", "Bob"]);
 }
+
+fn dump_and_re_read_with_options(
+	tag: &Id3v2Tag,
+	write_options: WriteOptions,
+	parse_options: ParseOptions,
+) -> Id3v2Tag {
+	let mut tag_bytes = Vec::new();
+	let mut writer = Cursor::new(&mut tag_bytes);
+	tag.dump_to(&mut writer, write_options).unwrap();
+
+	read_tag_with_options(&tag_bytes[..], parse_options)
+}
+
+#[test_log::test]
+fn multi_value_timestamp_frame_preserved_as_text() {
+	// A TDRC frame holding multiple values cannot be represented by a single `Timestamp`,
+	// so it must be preserved in full as a text frame rather than truncated to the first value.
+	let mut tag = Id3v2Tag::new();
+	tag.insert(Frame::Text(TextInformationFrame::new(
+		FrameId::Valid(Cow::Borrowed("TDRC")),
+		TextEncoding::UTF8,
+		"1982-05-21\x001983-01-02",
+	)));
+
+	let tag_re_read = dump_and_re_read_with_options(
+		&tag,
+		WriteOptions::default(),
+		ParseOptions::new()
+			.implicit_conversions(false)
+			.parsing_mode(ParsingMode::BestAttempt),
+	);
+
+	assert_eq!(tag_re_read.len(), 1);
+	match tag_re_read.get(&FrameId::Valid(Cow::Borrowed("TDRC"))) {
+		Some(Frame::Text(frame)) => assert_eq!(frame.value, "1982-05-21\x001983-01-02"),
+		other => panic!("Expected a TextInformationFrame, got {other:?}"),
+	}
+
+	// The first value is still exposed through the accessor
+	assert_eq!(
+		tag_re_read.date(),
+		Some(Timestamp {
+			year: 1982,
+			month: Some(5),
+			day: Some(21),
+			..Timestamp::default()
+		})
+	);
+}
+
+#[test_log::test]
+fn non_timestamp_text_in_timestamp_frame_preserved_as_text() {
+	// A TDRC frame with unparsable content must not fail the whole tag read, nor be dropped.
+	let mut tag = Id3v2Tag::new();
+	tag.insert(Frame::Text(TextInformationFrame::new(
+		FrameId::Valid(Cow::Borrowed("TDRC")),
+		TextEncoding::UTF8,
+		"circa 1990",
+	)));
+	tag.insert(Frame::Text(TextInformationFrame::new(
+		FrameId::Valid(Cow::Borrowed("TIT2")),
+		TextEncoding::UTF8,
+		"Foo title",
+	)));
+
+	let tag_re_read = dump_and_re_read_with_options(
+		&tag,
+		WriteOptions::default(),
+		ParseOptions::new()
+			.implicit_conversions(false)
+			.parsing_mode(ParsingMode::BestAttempt),
+	);
+
+	assert_eq!(tag_re_read.len(), 2);
+	match tag_re_read.get(&FrameId::Valid(Cow::Borrowed("TDRC"))) {
+		Some(Frame::Text(frame)) => assert_eq!(frame.value, "circa 1990"),
+		other => panic!("Expected a TextInformationFrame, got {other:?}"),
+	}
+	assert_eq!(tag_re_read.date(), None);
+
+	// Relaxed mode behaves the same
+	let tag_re_read = dump_and_re_read_with_options(
+		&tag,
+		WriteOptions::default(),
+		ParseOptions::new()
+			.implicit_conversions(false)
+			.parsing_mode(ParsingMode::Relaxed),
+	);
+	assert_eq!(tag_re_read.len(), 2);
+	assert!(matches!(
+		tag_re_read.get(&FrameId::Valid(Cow::Borrowed("TDRC"))),
+		Some(Frame::Text(_))
+	));
+
+	// The generic tag conversion keeps the raw text as well
+	let generic: Tag = tag_re_read.into();
+	assert_eq!(
+		generic.get_string(ItemKey::RecordingDate),
+		Some("circa 1990")
+	);
+}
+
+#[test_log::test]
+fn valid_timestamp_frame_still_parsed_as_timestamp() {
+	let mut tag = Id3v2Tag::new();
+	tag.insert(Frame::Text(TextInformationFrame::new(
+		FrameId::Valid(Cow::Borrowed("TDRC")),
+		TextEncoding::UTF8,
+		"1982-05-21",
+	)));
+
+	let tag_re_read = dump_and_re_read_with_options(
+		&tag,
+		WriteOptions::default(),
+		ParseOptions::new()
+			.implicit_conversions(false)
+			.parsing_mode(ParsingMode::BestAttempt),
+	);
+
+	match tag_re_read.get(&FrameId::Valid(Cow::Borrowed("TDRC"))) {
+		Some(Frame::Timestamp(frame)) => {
+			assert_eq!(frame.timestamp.year, 1982);
+			assert_eq!(frame.timestamp.month, Some(5));
+			assert_eq!(frame.timestamp.day, Some(21));
+		},
+		other => panic!("Expected a TimestampFrame, got {other:?}"),
+	}
+}
