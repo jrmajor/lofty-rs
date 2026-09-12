@@ -212,8 +212,14 @@ impl Id3v2Tag {
 
 	/// Returns all genres contained in a `TCON` frame.
 	///
-	/// This will translate any numeric genre IDs to their textual equivalent.
-	/// ID3v2.4-style multi-value fields will be split as normal.
+	/// The frame text is first split into values on the ID3v2.4 NUL separator.
+	/// Each value is then resolved on its own:
+	///
+	/// * A value that is only a numeric ID3v1 genre ID (e.g. `21`) is translated to its name.
+	/// * Leading ID3v2.3-style bracketed references (e.g. `(51)(39)Power Noise`) are each
+	///   translated and returned as separate genres, followed by the remaining refinement text.
+	/// * `RX` and `CR` are translated to `Remix` and `Cover`.
+	/// * A bracketed reference to an unknown genre (e.g. `(999)`) is returned as written.
 	pub fn genres(&self) -> Option<impl Iterator<Item = &str>> {
 		if let Some(Frame::Text(TextInformationFrame { value, .. })) = self.get(&GENRE_ID) {
 			return Some(GenresIter::new(value, false));
@@ -274,28 +280,37 @@ impl<'a> Iterator for GenresIter<'a> {
 			return None;
 		}
 
+		// Split on the ID3v2.4 separator first, then resolve references within the value
 		let remainder = &self.value[self.pos..];
+		let value_end = remainder
+			.find(V4_MULTI_VALUE_SEPARATOR)
+			.map_or(self.value.len(), |idx| self.pos + idx);
+		let value = &self.value[self.pos..value_end];
 
-		if let Some(idx) = remainder.find(V4_MULTI_VALUE_SEPARATOR) {
-			let start = self.pos;
-			let end = self.pos + idx;
-			self.pos = end + 1;
-			return Some(parse_genre(&self.value[start..end], self.preserve_indexes));
-		}
-
-		if remainder.starts_with('(') && remainder.contains(')') {
+		if value.starts_with('(') && value.contains(')') {
 			let start = self.pos + 1;
-			let mut end = self.pos + remainder.find(')').unwrap();
+			let mut end = self.pos + value.find(')').unwrap();
 			self.pos = end + 1;
 			// handle bracketed refinement e.g. (55)((I think...)"
-			if remainder.starts_with("((") {
+			if value.starts_with("((") {
 				end += 1;
 			}
-			return Some(parse_genre(&self.value[start..end], self.preserve_indexes));
+			if self.pos == value_end {
+				// Skip the separator
+				self.pos += 1;
+			}
+
+			let inner = &self.value[start..end];
+			let parsed = parse_genre(inner, self.preserve_indexes);
+			if !self.preserve_indexes && std::ptr::eq(parsed, inner) && !inner.starts_with('(') {
+				// An unknown reference (e.g. `(999)`), keep it as written
+				return Some(&self.value[start - 1..=end]);
+			}
+			return Some(parsed);
 		}
 
-		self.pos = self.value.len();
-		Some(parse_genre(remainder, self.preserve_indexes))
+		self.pos = value_end + 1;
+		Some(parse_genre(value, self.preserve_indexes))
 	}
 }
 

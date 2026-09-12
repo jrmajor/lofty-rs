@@ -1022,6 +1022,41 @@ fn genres_null_separated() {
 }
 
 #[test_log::test]
+fn genres_null_separated_references() {
+	// References are resolved per value, after splitting on the NUL separator
+	let tag = id3v2_tag_with_genre("(17)\0(13)\0(4)Eurodisco\0Funk");
+	let mut genres = tag.genres().unwrap();
+	assert_eq!(genres.next(), Some("Rock"));
+	assert_eq!(genres.next(), Some("Pop"));
+	assert_eq!(genres.next(), Some("Disco"));
+	assert_eq!(genres.next(), Some("Eurodisco"));
+	assert_eq!(genres.next(), Some("Funk"));
+	assert_eq!(genres.next(), None);
+}
+
+#[test_log::test]
+fn genres_reference_after_refinement_text_is_not_resolved() {
+	// Only leading references are resolved; the rest of the value is a refinement
+	let tag = id3v2_tag_with_genre("(17); (13)");
+	let mut genres = tag.genres().unwrap();
+	assert_eq!(genres.next(), Some("Rock"));
+	assert_eq!(genres.next(), Some("; (13)"));
+	assert_eq!(genres.next(), None);
+}
+
+#[test_log::test]
+fn genres_unknown_reference_kept_as_written() {
+	let tag = id3v2_tag_with_genre("(999)\0(17)(999)Foo\0999");
+	let mut genres = tag.genres().unwrap();
+	assert_eq!(genres.next(), Some("(999)"));
+	assert_eq!(genres.next(), Some("Rock"));
+	assert_eq!(genres.next(), Some("(999)"));
+	assert_eq!(genres.next(), Some("Foo"));
+	assert_eq!(genres.next(), Some("999"));
+	assert_eq!(genres.next(), None);
+}
+
+#[test_log::test]
 fn genres_id_textual_refinement() {
 	let tag = id3v2_tag_with_genre("(4)Eurodisco");
 	let mut genres = tag.genres().unwrap();
