@@ -1470,6 +1470,42 @@ fn split_tdrc_on_id3v23_save() {
 }
 
 #[test_log::test]
+fn id3v23_tyer_with_full_date_retained() {
+	// A TYER frame holding a full date is non-standard, but it must not be dropped
+	// when the TYER/TDAT/TIME -> TDRC conversion runs.
+	let mut tag_bytes = Vec::new();
+	Id3v2TagRef {
+		flags: Id3v2TagFlags::default(),
+		frames: vec![Frame::Text(TextInformationFrame::new(
+			FrameId::Valid(Cow::Borrowed("TYER")),
+			TextEncoding::Latin1,
+			String::from("1990-09-24"),
+		))]
+		.into_iter()
+		.peekable(),
+	}
+	.dump_to(&mut tag_bytes, WriteOptions::default().use_id3v23(true))
+	.unwrap();
+
+	let tag_re_read = read_tag_with_options(
+		&tag_bytes[..],
+		ParseOptions::new()
+			.implicit_conversions(true)
+			.parsing_mode(ParsingMode::Relaxed),
+	);
+
+	assert_eq!(tag_re_read.len(), 1);
+	match tag_re_read.get(&FrameId::Valid(Cow::Borrowed("TDRC"))) {
+		Some(Frame::Timestamp(frame)) => {
+			assert_eq!(frame.timestamp.year, 1990);
+			assert_eq!(frame.timestamp.month, Some(9));
+			assert_eq!(frame.timestamp.day, Some(24));
+		},
+		other => panic!("Expected a TimestampFrame, got {other:?}"),
+	}
+}
+
+#[test_log::test]
 fn artists_tag_conversion() {
 	const ARTISTS: &[&str] = &["Foo", "Bar", "Baz"];
 

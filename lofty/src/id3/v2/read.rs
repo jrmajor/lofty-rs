@@ -71,6 +71,7 @@ fn construct_tdrc_from_v3(tag: &mut Id3v2Tag) {
 
 	// This is not a TYER frame
 	if year_frame.timestamp.month.is_some() {
+		tag.insert(Frame::Timestamp(year_frame));
 		return;
 	}
 
