@@ -161,27 +161,44 @@ pub(super) fn read_all_frames_into_list(
 	loop {
 		match ParsedFrame::read(reader, version, flags, parse_options)? {
 			ParsedFrame::Next(frame) => {
-				let frame_value_is_empty = frame.is_empty();
-				if let Some(replaced_frame) = list.insert(frame) {
-					// Duplicate frames are not allowed. But if this occurs we try
-					// to keep the frame with the non-empty content. Superfluous,
-					// duplicate frames that follow the first frame are often empty.
-					if frame_value_is_empty == Some(true)
-						&& replaced_frame.is_empty() == Some(false)
-					{
-						log::warn!(
-							"Restoring non-empty frame with ID \"{id}\" that has been replaced by \
-							 an empty frame with the same ID",
-							id = replaced_frame.id()
-						);
-						drop(list.insert(replaced_frame));
-					} else {
-						log::warn!(
-							"Replaced frame with ID \"{id}\" by a frame with the same ID",
-							id = replaced_frame.id()
-						);
-					}
+				// Frames are kept in file order without deduplication. Some writers
+				// (e.g. foobar2000) legitimately repeat frames with the same ID and
+				// description to store multiple values, and we must not lose those.
+				//
+				// The only exception is an empty duplicate of a non-empty frame, which
+				// carries no information. Superfluous, duplicate frames that follow the
+				// first frame are often empty.
+				match frame.is_empty() {
+					Some(true) => {
+						let has_non_empty_duplicate = list
+							.iter()
+							.any(|f| f == &frame && f.is_empty() == Some(false));
+						if has_non_empty_duplicate {
+							log::warn!(
+								"Discarding empty frame with ID \"{id}\" that duplicates a non-empty \
+								 frame",
+								id = frame.id()
+							);
+							continue;
+						}
+					},
+					Some(false) => {
+						let empty_duplicate = list
+							.iter()
+							.position(|f| f == &frame && f.is_empty() == Some(true));
+						if let Some(pos) = empty_duplicate {
+							log::warn!(
+								"Replacing empty frame with ID \"{id}\" by a non-empty frame with the \
+								 same ID",
+								id = frame.id()
+							);
+							list.remove_at(pos);
+						}
+					},
+					None => {},
 				}
+
+				list.push(frame);
 			},
 			// No frame content found or ignored due to errors, but we can expect more frames
 			ParsedFrame::Skip => {},

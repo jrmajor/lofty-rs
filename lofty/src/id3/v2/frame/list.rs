@@ -265,6 +265,10 @@ impl<'a> FrameList<'a> {
 		self.0.to_mut().push(frame);
 	}
 
+	pub(crate) fn remove_at(&mut self, index: usize) -> Frame<'a> {
+		self.0.to_mut().remove(index)
+	}
+
 	pub(crate) fn reserve(&mut self, additional: usize) {
 		self.0.to_mut().reserve(additional);
 	}

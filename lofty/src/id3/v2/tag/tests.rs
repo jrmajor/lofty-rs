@@ -1618,3 +1618,134 @@ popm_tests! {
 	(StarRating::Four, 204),
 	(StarRating::Five, 255);
 }
+
+fn dump_frames_and_re_read(frames: Vec<Frame<'static>>, use_id3v23: bool) -> Id3v2Tag {
+	let mut tag_bytes = Vec::new();
+	Id3v2TagRef {
+		flags: Id3v2TagFlags::default(),
+		frames: frames.into_iter().peekable(),
+	}
+	.dump_to(
+		&mut tag_bytes,
+		WriteOptions::default().use_id3v23(use_id3v23),
+	)
+	.unwrap();
+
+	read_tag_with_options(
+		&tag_bytes[..],
+		ParseOptions::new()
+			.implicit_conversions(false)
+			.parsing_mode(ParsingMode::Relaxed),
+	)
+}
+
+#[test_log::test]
+fn read_preserves_repeated_txxx_and_comm_frames() {
+	// foobar2000 writes multi-value custom fields in ID3v2.3 as repeated `TXXX`
+	// frames sharing a description. The same applies to `COMM` frames sharing
+	// a language and description. Reading must preserve every frame in file order.
+	let frames = vec![
+		Frame::UserText(ExtendedTextFrame::new(
+			TextEncoding::UTF8,
+			String::from("STYLE"),
+			String::from("Rock"),
+		)),
+		Frame::Comment(CommentFrame::new(
+			TextEncoding::UTF8,
+			ENGLISH,
+			String::new(),
+			String::from("First comment"),
+		)),
+		Frame::UserText(ExtendedTextFrame::new(
+			TextEncoding::UTF8,
+			String::from("STYLE"),
+			String::from("Pop"),
+		)),
+		Frame::Comment(CommentFrame::new(
+			TextEncoding::UTF8,
+			ENGLISH,
+			String::new(),
+			String::from("Second comment"),
+		)),
+	];
+
+	for use_id3v23 in [true, false] {
+		let tag = dump_frames_and_re_read(frames.clone(), use_id3v23);
+
+		assert_eq!(tag.len(), 4, "use_id3v23: {use_id3v23}");
+
+		let txxx_contents = tag
+			.frames
+			.iter()
+			.filter_map(|f| match f {
+				Frame::UserText(ExtendedTextFrame {
+					description,
+					content,
+					..
+				}) if description == "STYLE" => Some(&**content),
+				_ => None,
+			})
+			.collect::<Vec<_>>();
+		assert_eq!(txxx_contents, ["Rock", "Pop"], "use_id3v23: {use_id3v23}");
+
+		let comm_contents = tag
+			.frames
+			.iter()
+			.filter_map(|f| match f {
+				Frame::Comment(CommentFrame {
+					language,
+					description,
+					content,
+					..
+				}) if *language == ENGLISH && description.is_empty() => Some(&**content),
+				_ => None,
+			})
+			.collect::<Vec<_>>();
+		assert_eq!(
+			comm_contents,
+			["First comment", "Second comment"],
+			"use_id3v23: {use_id3v23}"
+		);
+	}
+}
+
+#[test_log::test]
+fn read_discards_only_empty_duplicate_frames() {
+	// An empty duplicate of a non-empty frame carries no information and is
+	// dropped regardless of which side of the non-empty frame it appears on.
+	// Non-empty duplicates are never discarded.
+	let frames = vec![
+		Frame::UserText(ExtendedTextFrame::new(
+			TextEncoding::UTF8,
+			String::from("PRODUCER"),
+			String::new(),
+		)),
+		Frame::UserText(ExtendedTextFrame::new(
+			TextEncoding::UTF8,
+			String::from("PRODUCER"),
+			String::from("Alice"),
+		)),
+		Frame::UserText(ExtendedTextFrame::new(
+			TextEncoding::UTF8,
+			String::from("PRODUCER"),
+			String::new(),
+		)),
+		Frame::UserText(ExtendedTextFrame::new(
+			TextEncoding::UTF8,
+			String::from("PRODUCER"),
+			String::from("Bob"),
+		)),
+	];
+
+	let tag = dump_frames_and_re_read(frames, false);
+
+	let contents = tag
+		.frames
+		.iter()
+		.filter_map(|f| match f {
+			Frame::UserText(ExtendedTextFrame { content, .. }) => Some(&**content),
+			_ => None,
+		})
+		.collect::<Vec<_>>();
+	assert_eq!(contents, ["Alice", "Bob"]);
+}
