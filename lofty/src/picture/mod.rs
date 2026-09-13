@@ -917,25 +917,17 @@ impl Picture {
 
 		let pic_type = PictureType::from_ape_key(key);
 
-		let reader = &mut &*bytes;
-		let mut pos = 0;
+		let (desc_bytes, pos) = match bytes.iter().position(|&b| b == b'\0') {
+			Some(nul_pos) => (&bytes[..nul_pos], nul_pos + 1),
+			None => (bytes, bytes.len()),
+		};
 
 		let mut description = None;
-		let mut desc_text = String::new();
-
-		while let Ok(ch) = reader.read_u8() {
-			pos += 1;
-
-			if ch == b'\0' {
-				break;
-			}
-
-			desc_text.push(char::from(ch));
+		if !desc_bytes.is_empty() {
+			description = Some(Cow::from(String::from_utf8_lossy(desc_bytes).into_owned()));
 		}
 
-		if !desc_text.is_empty() {
-			description = Some(Cow::from(desc_text));
-		}
+		let reader = &mut &bytes[pos..];
 
 		let mime_type = {
 			let mut identifier = [0; 8];

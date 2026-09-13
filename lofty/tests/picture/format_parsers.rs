@@ -68,6 +68,19 @@ fn ape_binary_item() {
 }
 
 #[test_log::test]
+fn ape_binary_item_utf8_description() {
+	let mut pic = create_original_picture();
+	pic.set_description(Some(String::from("Обложка 封面 ✓")));
+
+	let buf = pic.as_ape_bytes();
+
+	let parsed = Picture::from_ape_bytes("Cover Art (Front)", &buf).unwrap();
+
+	assert_eq!(parsed.description(), Some("Обложка 封面 ✓"));
+	assert_eq!(pic, parsed);
+}
+
+#[test_log::test]
 fn as_ape_bytes() {
 	let buf = get_buf("tests/picture/assets/png_640x628.apev2");
 
