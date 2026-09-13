@@ -330,17 +330,12 @@ impl<'a> FrameList<'a> {
 	/// assert!(tag.is_empty());
 	/// ```
 	pub fn remove(&mut self, id: &FrameId<'_>) -> impl Iterator<Item = Frame<'a>> {
-		// TODO: drain_filter
-		let mut split_idx = 0_usize;
-
-		for read_idx in 0..self.0.len() {
-			if self.0[read_idx].id() == id {
-				self.0.to_mut().swap(split_idx, read_idx);
-				split_idx += 1;
-			}
-		}
-
-		self.0.to_mut().drain(..split_idx)
+		let removed = self
+			.0
+			.to_mut()
+			.extract_if(.., |frame| frame.id() == id)
+			.collect::<Vec<_>>();
+		removed.into_iter()
 	}
 
 	/// Removes a certain [`PictureType`]
@@ -524,5 +519,47 @@ impl<'a> IntoIterator for FrameList<'a> {
 impl<'a> From<FrameList<'a>> for Vec<Frame<'a>> {
 	fn from(list: FrameList<'a>) -> Self {
 		list.0.into_owned()
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn text_frame(id: &'static str, value: &'static str) -> Frame<'static> {
+		Frame::Text(TextInformationFrame::new(
+			FrameId::Valid(Cow::Borrowed(id)),
+			TextEncoding::UTF8,
+			value,
+		))
+	}
+
+	#[test]
+	fn remove_preserves_remaining_frame_order() {
+		let mut list = FrameList::new();
+		list.push(text_frame("TIT2", "Title"));
+		list.push(text_frame("TPE1", "Alice"));
+		list.push(text_frame("TPE2", "Bob"));
+		list.push(text_frame("TYER", "2000"));
+		list.push(text_frame("TYER", "2001"));
+
+		let removed = list
+			.remove(&FrameId::Valid(Cow::Borrowed("TYER")))
+			.collect::<Vec<_>>();
+
+		assert_eq!(
+			list.iter().map(Frame::id_str).collect::<Vec<_>>(),
+			["TIT2", "TPE1", "TPE2"]
+		);
+		assert_eq!(
+			removed
+				.iter()
+				.map(|frame| match frame {
+					Frame::Text(frame) => frame.value.as_ref(),
+					_ => unreachable!(),
+				})
+				.collect::<Vec<_>>(),
+			["2000", "2001"]
+		);
 	}
 }
