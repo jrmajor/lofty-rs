@@ -1541,6 +1541,74 @@ fn id3v23_tyer_with_full_date_retained() {
 }
 
 #[test_log::test]
+fn id3v23_repeated_tyer_frames_retained() {
+	// Repeated TYER frames are converted to repeated TDRC frames. A single TDAT
+	// cannot apply to several years, so all TDRC frames must be kept untouched
+	// and the TDAT frame left alone.
+	let frames = vec![
+		Frame::Text(TextInformationFrame::new(
+			FrameId::Valid(Cow::Borrowed("TYER")),
+			TextEncoding::Latin1,
+			String::from("1990"),
+		)),
+		Frame::Text(TextInformationFrame::new(
+			FrameId::Valid(Cow::Borrowed("TYER")),
+			TextEncoding::Latin1,
+			String::from("1995"),
+		)),
+		Frame::Text(TextInformationFrame::new(
+			FrameId::Valid(Cow::Borrowed("TDAT")),
+			TextEncoding::Latin1,
+			String::from("2409"),
+		)),
+	];
+
+	let mut tag_bytes = Vec::new();
+	Id3v2TagRef {
+		flags: Id3v2TagFlags::default(),
+		frames: frames.into_iter().peekable(),
+	}
+	.dump_to(&mut tag_bytes, WriteOptions::default().use_id3v23(true))
+	.unwrap();
+
+	let tag_re_read = read_tag_with_options(
+		&tag_bytes[..],
+		ParseOptions::new()
+			.implicit_conversions(true)
+			.parsing_mode(ParsingMode::Relaxed),
+	);
+
+	assert_eq!(tag_re_read.len(), 3);
+
+	let years = tag_re_read
+		.frames
+		.iter()
+		.filter_map(|f| match f {
+			Frame::Timestamp(frame) if frame.id().as_str() == "TDRC" => Some(frame.timestamp),
+			_ => None,
+		})
+		.collect::<Vec<_>>();
+	assert_eq!(
+		years,
+		[
+			Timestamp {
+				year: 1990,
+				..Timestamp::default()
+			},
+			Timestamp {
+				year: 1995,
+				..Timestamp::default()
+			},
+		]
+	);
+
+	let date = tag_re_read
+		.get_text(&FrameId::Valid(Cow::Borrowed("TDAT")))
+		.expect("Expected TDAT frame");
+	assert_eq!(date, "2409");
+}
+
+#[test_log::test]
 fn artists_tag_conversion() {
 	const ARTISTS: &[&str] = &["Foo", "Bar", "Baz"];
 

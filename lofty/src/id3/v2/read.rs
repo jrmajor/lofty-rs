@@ -59,7 +59,19 @@ fn construct_tdrc_from_v3(tag: &mut Id3v2Tag) {
 	const TIME: FrameId<'_> = FrameId::Valid(Cow::Borrowed("TIME"));
 
 	// Our TYER frame gets converted to TDRC earlier
-	let Some(year_frame) = tag.remove(&TDRC).next() else {
+	let mut year_frames = tag.remove(&TDRC).collect::<Vec<_>>();
+
+	// A single TDAT/TIME pair cannot apply to several years, so repeated TYER
+	// frames are retained as-is.
+	if year_frames.len() > 1 {
+		log::warn!("Multiple TYER frames found, retaining all without merging TDAT/TIME.");
+		for frame in year_frames {
+			tag.push(frame);
+		}
+		return;
+	}
+
+	let Some(year_frame) = year_frames.pop() else {
 		return;
 	};
 
